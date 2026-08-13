@@ -48,7 +48,7 @@ still known to be done and is never fetched twice.
 No install, no virtualenv, no `pip`. One file, standard library only.
 
 ```bash
-curl -LO https://raw.githubusercontent.com/YOUR_USER/hf-gated-downloader/main/hf_gated_downloader.py
+curl -LO https://raw.githubusercontent.com/yaminerl/hf-gated-downloader/main/hf_gated_downloader.py
 chmod +x hf_gated_downloader.py
 ./hf_gated_downloader.py
 ```

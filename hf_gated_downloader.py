@@ -34,7 +34,9 @@ from urllib.request import Request, urlopen
 
 
 HUB_URL = "https://huggingface.co"
-DEFAULT_REPOSITORY = "https://huggingface.co/unsloth/Kimi-K3/tree/main"
+# Blank on purpose: nothing should download until the user has named a repo.
+# The panel shows the Repository field empty and refuses to start until it is set.
+DEFAULT_REPOSITORY = ""
 GIGABYTE = 1_000_000_000
 CHUNK_SIZE = 1024 * 1024
 SOCKET_TIMEOUT = 30
