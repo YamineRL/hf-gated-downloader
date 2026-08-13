@@ -358,7 +358,8 @@ class Audit:
     def summary(self) -> str:
         parts = []
         if self.adopted:
-            parts.append(f"{len(self.adopted):,} already in the folder")
+            # Rendered under an "Already had" label, so no second "already" here.
+            parts.append(f"{len(self.adopted):,} in the folder")
         if self.recorded:
             parts.append(f"{len(self.recorded):,} completed earlier and moved away")
         if self.mismatched:
