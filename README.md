@@ -11,7 +11,12 @@ somewhere else, and it carries on where it left off.
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)
 
-<!-- Add a terminal screenshot or asciinema cast here. -->
+![The storage gate in action](docs/demo.gif)
+
+<sup>A 10.9 GB GGUF repository being pulled into a 1.7 GB folder. The transfer
+runs until the ceiling blocks the next shard, stops on its own, and resumes
+automatically the moment a finished shard is moved off — no restart, nothing
+re-downloaded. Raw recording: [`docs/demo.cast`](docs/demo.cast).</sup>
 
 ---
 
