@@ -1,7 +1,3 @@
-# The repo tracks four files: the script, README.md, ROADMAP.md, LICENSE.
-# Everything else here is either a Python artefact or someone else's model.
-
-# Downloaded model repositories and their partials
 *.safetensors
 *.gguf
 *.bin
@@ -13,7 +9,6 @@
 *.part
 *.*.part
 
-# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -22,7 +17,6 @@ dist/
 .venv/
 venv/
 
-# Tooling and editors
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
@@ -30,10 +24,11 @@ venv/
 .vscode/
 *.swp
 
-# OS noise
 .DS_Store
 Thumbs.db
 
-# Local agent/session state
 .claude/
 .coli_usage
+
+Underdog-Saluki-27B-1.0/
+lingbot-map/
