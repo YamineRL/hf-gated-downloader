@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -157,7 +157,12 @@ class State:
 
 
 def parse_repository(value: str, revision_override: str | None, subfolder_override: str | None = None) -> Repository:
-    """Accept org/repo or a Hugging Face model, dataset, or Space URL."""
+    """Accept org/repo or a Hugging Face model, dataset, or Space URL.
+
+    A URL carrying ?show_file_info=<repo-relative file path> resolves to the
+    folder holding that file, so a copied quant link downloads that quant only.
+    An explicit --subfolder always wins over anything the URL implies.
+    """
 
     raw = value.strip().rstrip("/")
     if not raw:
@@ -180,6 +185,17 @@ def parse_repository(value: str, revision_override: str | None, subfolder_overri
             revision = parts[3]
             if len(parts) > 4:
                 subfolder = "/".join(parts[4:])
+        elif parsed.query and not subfolder:
+            # A copied file link carries ?show_file_info=<repo-relative path>, e.g.
+            # huggingface.co/unsloth/GLM-5.3-GGUF?show_file_info=UD-Q6_K_XL%2Fmodel.gguf.
+            # The folder holding that file is the quant the user pointed at; treat
+            # it as the subfolder so one quant downloads, not every quant (or the
+            # repo-wide default) in the revision.
+            pointers = parse_qs(parsed.query).get("show_file_info", [])
+            if pointers:
+                pointer = pointers[0].strip("/")
+                if "/" in pointer:
+                    subfolder = pointer.rsplit("/", 1)[0]
     else:
         parts = [part for part in raw.split("/") if part]
         if parts and parts[0] in {"datasets", "spaces"}:
@@ -331,6 +347,42 @@ def list_files(repository: Repository, token: str | None, expand: bool = False) 
     if not files:
         raise DownloadError("No files found in this revision.")
     return files
+
+
+# Files a runner needs that sit outside a quant folder. A GGUF normally carries
+# its own tokenizer and chat template, but multi-modal builds keep the vision
+# projector (mmproj) — and some repos keep tokenizer-side config — at the root,
+# next to the quant folders rather than inside one.
+RUNTIME_EXACT_NAMES = {
+    "config.json",
+    "generation_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "added_tokens.json",
+    "vocab.json",
+    "vocab.txt",
+    "merges.txt",
+    "tokenizer.model",
+    "preprocessor_config.json",
+    "image_processor_config.json",
+    "video_processor_config.json",
+    "processor_config.json",
+    "chat_template.jinja",
+    "chat_template.json",
+    "template",
+    "params",
+}
+
+
+def is_runtime_extra(path: str) -> bool:
+    """True for a file the model needs at run time but that lives outside the
+    quant folder. Quant shards from sibling folders never match."""
+
+    name = path.rsplit("/", 1)[-1].lower()
+    if name in RUNTIME_EXACT_NAMES:
+        return True
+    return name.startswith("mmproj") or "chat_template" in name
 
 
 @dataclass
@@ -1302,6 +1354,9 @@ class Downloader:
         self.terminal = terminal
         self.stop_requested = False
         self.limit_was_reached = False
+        # Support files pulled from outside the subfolder so the download is
+        # runnable; reported at the end so their arrival is never a surprise.
+        self.supporting: list[str] = []
         # Keying partials to the revision stops a stale .part from a different
         # revision being resumed into a file it does not belong to.
         stamp = hashlib.sha1(self.repository.label.encode()).hexdigest()[:8]
@@ -1542,6 +1597,26 @@ class Downloader:
         try:
             self.terminal.pump(state, force=True)
             files = list_files(self.repository, self.token, expand=self.settings.verify)
+            if self.repository.subfolder:
+                # The quant folder is usually self-contained, but the runtime
+                # extras (vision projector, tokenizer config) often sit at the
+                # repo root next to it. Fetch the whole manifest once to find
+                # those without also pulling every other quant.
+                whole = list_files(
+                    Repository(
+                        repo_id=self.repository.repo_id,
+                        repo_type=self.repository.repo_type,
+                        revision=self.repository.revision,
+                    ),
+                    self.token,
+                    expand=self.settings.verify,
+                )
+                chosen = {item.path for item in files}
+                for item in whole:
+                    if item.path in chosen or not is_runtime_extra(item.path):
+                        continue
+                    files.append(item)
+                    self.supporting.append(item.path)
             store = SessionStore(self.destination, self.repository)
             state.total_files = len(files)
             state.total_bytes = sum(item.size for item in files)
@@ -1644,6 +1719,12 @@ class Downloader:
         if moved:
             were = "is" if moved == 1 else "are"
             detail.append(f"{moved:,} completed earlier {were} no longer in the folder")
+        if self.supporting:
+            names = ", ".join(self.supporting)
+            where = self.repository.subfolder
+            detail.append(
+                f"with {len(self.supporting):,} supporting file(s) from outside {where}: {names}"
+            )
         state.message = "All {:,} repository files are accounted for.".format(len(files))
         if detail:
             state.message += "  " + "  ·  ".join(detail) + "."
@@ -1669,9 +1750,13 @@ def build_parser() -> argparse.ArgumentParser:
             "(and drive the run outright under --no-tui)."
         )
     )
-    parser.add_argument("repository", nargs="?", help="owner/repo or a huggingface.co URL")
+    parser.add_argument(
+        "repository",
+        nargs="?",
+        help="owner/repo or a huggingface.co URL (a ?show_file_info= link selects that quant's folder)",
+    )
     parser.add_argument("--revision", help="Revision, branch, tag, or commit")
-    parser.add_argument("--subfolder", help="Only download files under this subfolder")
+    parser.add_argument("--subfolder", help="Only download files under this subfolder (overrides the URL's)")
     parser.add_argument("--output", help="Parent folder for the model folder")
     parser.add_argument("--dir-name", help="Override the model-named subfolder")
     parser.add_argument("--no-subdir", action="store_true", help="Download straight into the parent folder")

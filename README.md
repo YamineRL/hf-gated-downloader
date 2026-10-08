@@ -72,12 +72,19 @@ Prefer flags? They pre-fill the same panel, or drive the run outright with
 ./hf_gated_downloader.py unsloth/DeepSeek-V4-GGUF \
     --output /mnt/models --max-gb 100 --resume-gb 60 --no-tui
 
-# Gated or private repo
+# Gated or private repo (or type the token into the panel once)
 export HF_TOKEN=hf_xxxxxxxxxxxx
 ./hf_gated_downloader.py owner/private-repo
 
 # Just one folder of a large repo
 ./hf_gated_downloader.py owner/repo --subfolder UD-Q4_K_XL --revision main
+
+# Or paste the URL of a quant's file from the Hub — the folder that file sits in
+# is what downloads, e.g. the UD-Q6_K_XL shard set and nothing else, plus any
+# support files (mmproj, tokenizer config) that sit outside the quant folder
+./hf_gated_downloader.py \
+    'https://huggingface.co/unsloth/GLM-5.3-GGUF?show_file_info=UD-Q6_K_XL%2FGLM-5.3-UD-Q6_K_XL-00001-of-00016.gguf' \
+    --output /mnt/models --max-gb 700 --no-tui
 ```
 
 ## Why not just use `hf download`?
@@ -170,6 +177,11 @@ Everything is configurable from the panel — no flag is ever required.
 | `s` | Start the download |
 | `q` | Quit |
 
+A token typed into **Access token** is saved to disk (mode `0600`) and
+pre-filled on the next launch, so gated repositories need it entered once.
+`$HF_TOKEN` and `--token` still win over the saved one, and an existing
+`hf auth login` is picked up automatically. Blank the field to forget it.
+
 **While downloading**
 
 | Key | Action |
@@ -197,7 +209,7 @@ the same command picks up where it stopped.
 | `--resume-gb` | Once full, wait until the folder is below this |
 | `--poll-seconds` | Seconds between storage checks (1–60) |
 | `--retries` | Attempts after a dropped connection (default 8) |
-| `--token` | Access token; defaults to `$HF_TOKEN` |
+| `--token` | Access token; defaults to `$HF_TOKEN`, then the saved token |
 | `--verify` | Checksum files already in the folder instead of trusting size |
 | `--retry-missing` | Re-fetch files completed earlier but since moved away |
 | `--no-tui` | Run headless with the values given |
@@ -207,6 +219,7 @@ the same command picks up where it stopped.
 | What | Where |
 |---|---|
 | Completed-file record | `$XDG_STATE_HOME/hf-gated-downloader/<hash>.json` (default `~/.local/state/…`) |
+| Access token | `$XDG_CONFIG_HOME/hf-gated-downloader/token` (default `~/.config/…`), mode `0600` |
 | In-flight files | `<name>.<revision-hash>.part`, next to the final file |
 
 The session store is keyed by destination *and* repository, so several
