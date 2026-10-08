@@ -497,6 +497,65 @@ class SessionStore:
         self.save()
 
 
+class TokenStore:
+    """Remember the access token between runs so it is typed once, not every launch."""
+
+    def __init__(self) -> None:
+        config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        self.path = config_home / "hf-gated-downloader" / "token"
+
+    def load(self) -> str:
+        """Our own saved token, falling back to one an `hf auth login` already wrote."""
+
+        for candidate in (self.path, huggingface_cli_token_path()):
+            try:
+                token = candidate.read_text().strip()
+            except OSError:
+                continue
+            if token:
+                return token
+        return ""
+
+    def remember(self, token: str) -> None:
+        """Store a token the user typed, or forget the stored one when blanked."""
+
+        token = token.strip()
+        if not token:
+            self.forget()
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(".tmp")
+            # Create at 0600 rather than chmod after: the secret is never
+            # briefly readable by anyone else on the machine.
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w") as handle:
+                handle.write(token + "\n")
+            os.replace(temporary, self.path)
+        except OSError:
+            # A token that cannot be saved still works for this run.
+            return
+
+    def forget(self) -> None:
+        try:
+            self.path.unlink()
+        except OSError:
+            return
+
+
+def huggingface_cli_token_path() -> Path:
+    """Where `hf auth login` keeps its token, so an existing login is picked up."""
+
+    explicit = os.environ.get("HF_TOKEN_PATH")
+    if explicit:
+        return Path(explicit).expanduser()
+    home = os.environ.get("HF_HOME")
+    base = Path(home).expanduser() if home else Path(
+        os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")
+    ) / "huggingface"
+    return base / "token"
+
+
 @dataclass
 class Settings:
     """Every knob the downloader has. Edited in the TUI, never required as a flag."""
@@ -582,7 +641,7 @@ FIELDS: tuple[Field, ...] = (
     Field("Resume below", "resume_gb", "number", "once full, wait until the folder drops under this", step=5, live=True),
     Field("Poll interval", "poll_seconds", "int", "seconds between storage checks (1-60)", step=5, live=True),
     Field("Retries", "retries", "int", "attempts after a dropped connection", step=1, live=True),
-    Field("Access token", "token", "text", "needed for gated or private repositories", secret=True),
+    Field("Access token", "token", "text", "needed for gated repos; saved for next launch", secret=True),
     Field("Verify existing", "verify", "bool", "checksum files already in the folder instead of trusting their size"),
     Field("Re-download moved", "retry_missing", "bool", "fetch files completed earlier but since moved away"),
 )
@@ -1620,7 +1679,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume-gb", type=float, help="Once full, wait until the folder is below this many GB")
     parser.add_argument("--poll-seconds", type=int, help="Seconds between storage checks (1-60)")
     parser.add_argument("--retries", type=int, help=f"Retries for a dropped connection (default: {DEFAULT_RETRIES})")
-    parser.add_argument("--token", help="Hugging Face access token (defaults to HF_TOKEN)")
+    parser.add_argument(
+        "--token",
+        help="Hugging Face access token (defaults to HF_TOKEN, then the saved token)",
+    )
     parser.add_argument(
         "--verify",
         action="store_true",
@@ -1631,8 +1693,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def settings_from_args(args: argparse.Namespace) -> Settings:
-    settings = Settings(token=os.environ.get("HF_TOKEN", ""))
+def settings_from_args(args: argparse.Namespace, tokens: TokenStore) -> Settings:
+    # Precedence: --token, then HF_TOKEN, then whatever was saved last time.
+    settings = Settings(token=os.environ.get("HF_TOKEN", "") or tokens.load())
     if args.repository:
         settings.repository = args.repository
     if args.revision:
@@ -1667,13 +1730,17 @@ def settings_from_args(args: argparse.Namespace) -> Settings:
 
 def main() -> int:
     args = build_parser().parse_args()
-    settings = settings_from_args(args)
+    tokens = TokenStore()
+    settings = settings_from_args(args, tokens)
     terminal = Terminal(enabled=not args.no_tui)
     terminal.open()
     try:
         if terminal.enabled:
+            entered = settings.token
             if not terminal.configure(settings):
                 return 0
+            if settings.token != entered:
+                tokens.remember(settings.token)
         problem = settings.validate()
         if problem:
             raise DownloadError(problem)
